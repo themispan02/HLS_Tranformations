@@ -35,17 +35,13 @@ void jacobi_stencil(data_t input[N][N], data_t output[N][N], int num_iterations)
         for (i = 0; i < N; i++) {
             for (j = 0; j < N; j++) {
                 // Υπολογισμός γειτόνων με boundary conditions
-                const data_t west =
-                    (j == 0) ? A[i][j] : A[i][j-1];
+                const data_t west = (j == 0) ? A[i][j] : A[i][j-1];
 
-                const data_t east =
-                    (j == N-1) ? A[i][j] : A[i][j+1];
+                const data_t east = (j == N-1) ? A[i][j] : A[i][j+1];
 
-                const data_t north =
-                    (i == 0) ? A[i][j] : A[i-1][j];
+                const data_t north = (i == 0) ? A[i][j] : A[i-1][j];
 
-                const data_t south =
-                    (i == N-1) ? A[i][j] : A[i+1][j];
+                const data_t south = (i == N-1) ? A[i][j] : A[i+1][j];
 
                 // Υπολογισμός νέας τιμής (μέσος όρος 4 γειτόνων)
                 B[i][j] = (data_t)0.25 * (north + west + east + south);
