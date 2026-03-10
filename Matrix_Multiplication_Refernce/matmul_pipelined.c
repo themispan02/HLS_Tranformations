@@ -20,7 +20,7 @@ void matmul_pipelined(double A[N][K], double B[K][M], double C[N][M]) {
             double a_val = A[n][k];
 
             for (int m = 0; m < M; m++) {
-                // Ενεργοποίηση της διοχέτευσης με στόχο ένα αποτέλεσμα ανά κύκλο ρολογιού
+                // Ενεργοποίηση pipeline με στόχο ένα αποτέλεσμα ανά κύκλο ρολογιού
                 #pragma HLS PIPELINE II=1
 
                 // Pipelined Loop Fusion 2.4 & Flattening 2.6: Η αρχικοποίηση, η συσσώρευση και η εγγραφή
