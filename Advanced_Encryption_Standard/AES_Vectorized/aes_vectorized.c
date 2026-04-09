@@ -234,6 +234,11 @@ void aes256_encrypt_ecb(aes256_context *ctx, uint8_t k[32], uint8_t buf[16])
 /* §2.3: sbox → LUTRAM (κληρονομείται από Pipelined) */
 #pragma HLS RESOURCE variable=sbox core=RAM_2P_LUTRAM
 
+/*************************** ON OR OFF *************************************/
+/* §3.1: sbox → complete partition 256 ξεχωριστοί registers */
+#pragma HLS ARRAY_PARTITION variable=sbox complete
+/***************************************************************************/
+
 /* §3.1: buf → complete partition → 16 ξεχωριστοί registers
  * Χωρίς αυτό: UNROLL στα sub/mix/addkey loops δεν έχει αποτέλεσμα
  * γιατί ο HLS δεν μπορεί να παράγει παράλληλες BRAM προσβάσεις. */
