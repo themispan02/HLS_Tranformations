@@ -37,14 +37,14 @@
  *   §3.1 Array Partition      — complete partition στα fx_part arrays
  *   §4.3 Memory Striping      — cyclic partition στα position arrays
  *=============================================================================*/
-
+ 
 #include "md_pipelined.h"
-
+ 
 /* T: αριθμός partial accumulators.
  * T ≥ latency_dadd (≈3 για double) → II=1.
  * T=8 διαιρεί ακριβώς maxNeighbors=16. */
 #define TILE_SIZE 8
-
+ 
 void md_kernel(TYPE force_x[nAtoms],
                TYPE force_y[nAtoms],
                TYPE force_z[nAtoms],
@@ -57,26 +57,26 @@ void md_kernel(TYPE force_x[nAtoms],
     TYPE r6inv, potential, force, j_x, j_y, j_z;
     TYPE i_x, i_y, i_z;
     int32_t jidx;
-
+ 
     /* §2.1.2 Tiled Accumulation Interleaving */
     TYPE fx_part[TILE_SIZE];
     TYPE fy_part[TILE_SIZE];
     TYPE fz_part[TILE_SIZE];
-
+ 
     /* §2.6 Loop Flattening:
      * Ενοποίηση loop_i (nAtoms=256) × loop_j (maxNeighbors=16)
      * σε ένα flat pipeline 4096 iterations.
      * Αποφεύγεται pipeline fill/drain ×256 φορές.
      * Counters i,j διατηρούνται manually αντί division/modulo. */
     int i = 0, j = 0;
-
+ 
     flat_loop: for (int iter = 0; iter < nAtoms * maxNeighbors; iter++)
     {
 #pragma HLS PIPELINE II=1
 #pragma HLS DEPENDENCE variable=fx_part inter false
 #pragma HLS DEPENDENCE variable=fy_part inter false
 #pragma HLS DEPENDENCE variable=fz_part inter false
-
+ 
         /* §2.4 Pipelined Loop Fusion + §4.1 Memory Access Extraction:
          * Στην αρχή κάθε atom (j==0), φόρτωσε position σε scalars. */
         if (j == 0) {
@@ -84,13 +84,13 @@ void md_kernel(TYPE force_x[nAtoms],
             i_y = position_y[i];
             i_z = position_z[i];
         }
-
+ 
         /* Ανάγνωση γείτονα */
         jidx = NL[i * maxNeighbors + j];
         j_x = position_x[jidx];
         j_y = position_y[jidx];
         j_z = position_z[jidx];
-
+ 
         /* Υπολογισμός δύναμης Lennard-Jones */
         delx = i_x - j_x;
         dely = i_y - j_y;
@@ -99,11 +99,11 @@ void md_kernel(TYPE force_x[nAtoms],
         r6inv = r2inv * r2inv * r2inv;
         potential = r6inv * (lj1 * r6inv - lj2);
         force = r2inv * potential;
-
+ 
         TYPE dx = delx * force;
         TYPE dy = dely * force;
         TYPE dz = delz * force;
-
+ 
         /* §2.1.2 Tiled Accumulation Interleaving:
          * j < T:  πρώτο pass → overwrite (implicit init, §2.4)
          * j >= T: δεύτερο pass → accumulate
@@ -118,7 +118,7 @@ void md_kernel(TYPE force_x[nAtoms],
             fy_part[t] += dy;
             fz_part[t] += dz;
         }
-
+ 
         /* §2.4 Pipelined Loop Fusion:
          * Στο τέλος κάθε atom (j==last), collapse και store.
          * Collapse inline — χωρίς ξεχωριστό loop.
@@ -130,12 +130,12 @@ void md_kernel(TYPE force_x[nAtoms],
                     + fy_part[4] + fy_part[5] + fy_part[6] + fy_part[7];
             TYPE fz = fz_part[0] + fz_part[1] + fz_part[2] + fz_part[3]
                     + fz_part[4] + fz_part[5] + fz_part[6] + fz_part[7];
-
+ 
             force_x[i] = fx;
             force_y[i] = fy;
             force_z[i] = fz;
         }
-
+ 
         /* Manual counter update (§2.6 — αποφυγή division/modulo) */
         if (j == maxNeighbors - 1) {
             j = 0;

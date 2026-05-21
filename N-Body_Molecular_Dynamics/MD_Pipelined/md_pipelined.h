@@ -9,8 +9,8 @@
 #define TYPE double
 
 // Problem Constants
-#define nAtoms        256
-#define maxNeighbors  16
+#define nAtoms        25600
+#define maxNeighbors  160
 #define MAX_ITERATION 1
 // LJ coefficients
 #define lj1           1.5

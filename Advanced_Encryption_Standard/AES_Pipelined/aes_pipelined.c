@@ -30,10 +30,6 @@
  *         Coalescing            bodies → HLS coalesces rounds + bytes σε ένα
  *                               pipeline χωρίς drain cycles (Listing 8 paper).
  *
- * Στάδια που ΔΕΝ ανήκουν εδώ:
- *   §3.1 Horizontal Unrolling   → Vectorized (στάδιο 3)
- *   §3.2 Vertical Unrolling     → Systolic   (στάδιο 4)
- *   §3.3 Dataflow / multi-block → Systolic   (στάδιο 4)
  *=============================================================================*/
 
 #include "aes_pipelined.h"
