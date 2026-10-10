@@ -2,7 +2,7 @@
 // Created by themi on 5/8/2026.
 //
 
-#include "fft_strided_og.h"
+#include "fft_machsuite.h"
 #include <math.h>
 
 int main(){
