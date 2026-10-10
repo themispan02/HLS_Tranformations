@@ -72,10 +72,10 @@ void md_kernel(TYPE force_x[nAtoms],
  
     flat_loop: for (int iter = 0; iter < nAtoms * maxNeighbors; iter++)
     {
-#pragma HLS PIPELINE II=1
-#pragma HLS DEPENDENCE variable=fx_part inter false
-#pragma HLS DEPENDENCE variable=fy_part inter false
-#pragma HLS DEPENDENCE variable=fz_part inter false
+        #pragma HLS PIPELINE II=1
+        #pragma HLS DEPENDENCE variable=fx_part inter false
+        #pragma HLS DEPENDENCE variable=fy_part inter false
+        #pragma HLS DEPENDENCE variable=fz_part inter false
  
         /* §2.4 Pipelined Loop Fusion + §4.1 Memory Access Extraction:
          * Στην αρχή κάθε atom (j==0), φόρτωσε position σε scalars. */

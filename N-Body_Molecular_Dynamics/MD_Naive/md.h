@@ -16,8 +16,8 @@ In Proceedings of the 3rd Workshop on General-Purpose Computation on Graphics Pr
 #define TYPE double
 
 // Problem Constants
-#define nAtoms        25600
-#define maxNeighbors  160
+#define nAtoms        256
+#define maxNeighbors  16
 #define MAX_ITERATION 1
 // LJ coefficients
 #define lj1           1.5
