@@ -1,4 +1,8 @@
-/Stencil_Reference/stencil_ref_v2.exe
-/Stencil_Reference/stencil_ref.exe
-/Matrix_Multiplication_Refernce/matmul_pipelined_tb.exe
-/Advanced_Encryption_Standard/AES_Naive/cmake-build-debug/
+# Build outputs
+*.exe
+cmake-build-*/
+build/
+
+# IDE and workspace files
+/_ide/
+.idea/
