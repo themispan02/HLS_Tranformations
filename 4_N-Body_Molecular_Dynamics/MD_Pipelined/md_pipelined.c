@@ -1,48 +1,17 @@
-//
-// Created by themi on 10/4/2026.
-//
-
-/*=============================================================================
- * md_pipelined.c
+/*
+* Molecular dynamics: flattened pipelining variant. Not used in the results.
  *
- * MD/KNN — PIPELINED Implementation (Flattened)
+ * Merges the reset, the neighbour loop and the final reduction into one flat
+ * loop over all 4,096 (atom, neighbour) pairs, using conditionals on j.
+ * Applies §2.1.2 tiled accumulation (TILE_SIZE 8), §2.6 loop flattening and
+ * §4.1 memory access extraction (§ = section in de Fine Licht et al., TPDS 2021).
  *
- * Μετασχηματισμοί από de Fine Licht et al.:
- *
- *   §2.1.2 Tiled Accumulation   — Loop-carried dependency στα fx/fy/fz.
- *          Interleaving           T=8 partial accumulators.
- *                                 Iteration j γράφει στο fx_part[j % T].
- *                                 Πρώτο pass (j<T): overwrite (implicit init).
- *                                 Δεύτερο pass (j≥T): accumulate.
- *                                 Απόσταση T=8 ≥ L_dadd=3 → II=1.
- *
- *   §2.6  Loop Flattening        — Ενοποίηση loop_i × loop_j σε ένα
- *                                  flat pipeline (nAtoms × maxNeighbors
- *                                  = 4096 iterations).
- *                                  Pipeline fill/drain μόνο 1 φορά
- *                                  αντί 256 φορές.
- *                                  Init, compute, collapse ενσωματώνονται
- *                                  με conditionals (if j==0, if j==last).
- *
- *   §2.4  Pipelined Loop Fusion  — Init (j==0) και collapse (j==last)
- *                                  συγχωνεύονται μέσα στο pipeline
- *                                  αντί ξεχωριστών loops.
- *                                  Μηδέν drain cycles μεταξύ atoms.
- *
- *   §4.1  Memory Access         — Εξαγωγή position_x/y/z[i] σε local
- *         Extraction              scalars (i_x, i_y, i_z) στο j==0.
- *
- * Τι ΔΕΝ ανήκει εδώ (→ Vectorized στάδιο):
- *   §3.1 Horizontal Unrolling — UNROLL στο collapse
- *   §3.1 Array Partition      — complete partition στα fx_part arrays
- *   §4.3 Memory Striping      — cyclic partition στα position arrays
- *=============================================================================*/
+ * The pipelining stage in the results is MD_Pipelined_V2. The loop structure
+ * of this variant is reused inside the processing elements of MD_Systolic.
+ */
  
 #include "md_pipelined.h"
- 
-/* T: αριθμός partial accumulators.
- * T ≥ latency_dadd (≈3 για double) → II=1.
- * T=8 διαιρεί ακριβώς maxNeighbors=16. */
+
 #define TILE_SIZE 8
  
 void md_kernel(TYPE force_x[nAtoms],
@@ -63,11 +32,7 @@ void md_kernel(TYPE force_x[nAtoms],
     TYPE fy_part[TILE_SIZE];
     TYPE fz_part[TILE_SIZE];
  
-    /* §2.6 Loop Flattening:
-     * Ενοποίηση loop_i (nAtoms=256) × loop_j (maxNeighbors=16)
-     * σε ένα flat pipeline 4096 iterations.
-     * Αποφεύγεται pipeline fill/drain ×256 φορές.
-     * Counters i,j διατηρούνται manually αντί division/modulo. */
+    /* §2.6 One flat loop; i and j are advanced by hand, without division */
     int i = 0, j = 0;
  
     flat_loop: for (int iter = 0; iter < nAtoms * maxNeighbors; iter++)
@@ -77,21 +42,20 @@ void md_kernel(TYPE force_x[nAtoms],
         #pragma HLS DEPENDENCE variable=fy_part inter false
         #pragma HLS DEPENDENCE variable=fz_part inter false
  
-        /* §2.4 Pipelined Loop Fusion + §4.1 Memory Access Extraction:
-         * Στην αρχή κάθε atom (j==0), φόρτωσε position σε scalars. */
+        /* §4.1 Position of atom i, read at its first neighbour */
         if (j == 0) {
             i_x = position_x[i];
             i_y = position_y[i];
             i_z = position_z[i];
         }
- 
-        /* Ανάγνωση γείτονα */
+
+        /* Neighbour read */
         jidx = NL[i * maxNeighbors + j];
         j_x = position_x[jidx];
         j_y = position_y[jidx];
         j_z = position_z[jidx];
  
-        /* Υπολογισμός δύναμης Lennard-Jones */
+        /* Lennard-Jones Force Calculation */
         delx = i_x - j_x;
         dely = i_y - j_y;
         delz = i_z - j_z;
@@ -104,10 +68,7 @@ void md_kernel(TYPE force_x[nAtoms],
         TYPE dy = dely * force;
         TYPE dz = delz * force;
  
-        /* §2.1.2 Tiled Accumulation Interleaving:
-         * j < T:  πρώτο pass → overwrite (implicit init, §2.4)
-         * j >= T: δεύτερο pass → accumulate
-         * Απόσταση μεταξύ εγγραφών στο ίδιο fx_part[t] = T = 8 ≥ L_dadd */
+        /* §2.1.2 The first TILE_SIZE neighbours overwrite their slot, so no reset is needed */
         int t = j % TILE_SIZE;
         if (j < TILE_SIZE) {
             fx_part[t] = dx;
@@ -119,10 +80,7 @@ void md_kernel(TYPE force_x[nAtoms],
             fz_part[t] += dz;
         }
  
-        /* §2.4 Pipelined Loop Fusion:
-         * Στο τέλος κάθε atom (j==last), collapse και store.
-         * Collapse inline — χωρίς ξεχωριστό loop.
-         * Τρέχει κάθε 16 iterations → δεν επηρεάζει II. */
+        /* Last neighbour of atom i: reduce the partial sums and store */
         if (j == maxNeighbors - 1) {
             TYPE fx = fx_part[0] + fx_part[1] + fx_part[2] + fx_part[3]
                     + fx_part[4] + fx_part[5] + fx_part[6] + fx_part[7];
@@ -135,8 +93,7 @@ void md_kernel(TYPE force_x[nAtoms],
             force_y[i] = fy;
             force_z[i] = fz;
         }
- 
-        /* Manual counter update (§2.6 — αποφυγή division/modulo) */
+
         if (j == maxNeighbors - 1) {
             j = 0;
             i++;

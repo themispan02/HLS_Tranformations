@@ -1,6 +1,8 @@
-//
-// Created by themi on 5/20/2026.
-//
+/*
+ * Stencil 2D, 9-point: baseline.
+ * The original MachSuite stencil2d kernel, unmodified and without HLS directives.
+ * Source: https://github.com/breagen/MachSuite (BSD-3, Harvard University)
+ */
 
 #include "stencil.h"
 

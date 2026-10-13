@@ -1,15 +1,21 @@
-//
-// Created by themi on 6/6/2026.
-//
+/*
+* FFT (strided, radix-2, 1,024 points): systolic stage.
+ *
+ * Builds on the pipelined stage (coalesced loop, read/write once) and adds
+ * (§ = section in de Fine Licht et al., TPDS 2021):
+ *   §3.3  Dataflow: the ten FFT stages are written as a chain of calls inside a
+ *         DATAFLOW region, each with its own input and output buffer.
+ *
+ * With separate buffers a stage only reads its input and only writes its
+ * output, so each butterfly loop reaches II 1 (the pipelined stage had II 2).
+ * Note: because fft_stage is INLINEd, the tool merges the ten calls into a
+ * single process (warning HLS 214-273), so the stages run one after another
+ * and the interval equals the latency. The gain comes from II 1, not from
+ * overlapping stages.
+ */
 
 #include "fft_strided_systolic.h"
 
-/* -----------------------------------------------------------------------
- * One butterfly stage.
- * INLINE forces a separate hardware instance per call site, so each of
- * the 10 calls below becomes its own pipeline with a constant log value.
- * With constant log, span is constant -> addresses are affine in i.
- * ----------------------------------------------------------------------- */
 static void fft_stage(
     double r_in [FFT_SIZE],       double i_in [FFT_SIZE],
     double r_out[FFT_SIZE],       double i_out[FFT_SIZE],
@@ -63,6 +69,7 @@ void fft(double real[FFT_SIZE], double img[FFT_SIZE],
 {
     #pragma HLS DATAFLOW
 
+    /* §3.3 One buffer between each pair of stages: single producer, single consumer */
     double s0r[FFT_SIZE], s0i[FFT_SIZE];
     double s1r[FFT_SIZE], s1i[FFT_SIZE];
     double s2r[FFT_SIZE], s2i[FFT_SIZE];

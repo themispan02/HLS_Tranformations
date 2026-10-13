@@ -1,12 +1,11 @@
-//
-// Created by themi on 9/4/2026.
-//
-
 /*
-Implemenataion based on:
-A. Danalis, G. Marin, C. McCurdy, J. S. Meredith, P. C. Roth, K. Spafford, V. Tipparaju, and J. S. Vetter.
-The scalable heterogeneous computing (shoc) benchmark suite.
-In Proceedings of the 3rd Workshop on General-Purpose Computation on Graphics Processing Units, 2010.
+ * Molecular dynamics (k-nearest neighbours): baseline.
+ * The original MachSuite md/knn kernel, unmodified and without HLS directives.
+ * Source: https://github.com/breagen/MachSuite (BSD-3; UT-Battelle, Harvard University)
+ * Implemenataion based on:
+ * A. Danalis, G. Marin, C. McCurdy, J. S. Meredith, P. C. Roth, K. Spafford, V. Tipparaju, and J. S. Vetter.
+ * The scalable heterogeneous computing (shoc) benchmark suite.
+ * In Proceedings of the 3rd Workshop on General-Purpose Computation on Graphics Processing Units, 2010.
 */
 
 #include "md.h"

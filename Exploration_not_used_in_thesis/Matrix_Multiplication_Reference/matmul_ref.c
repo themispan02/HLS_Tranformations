@@ -1,4 +1,8 @@
-//
+/*
+ * Matrix multiplication 64x64 (double): reference. Exploration, not used in
+ * the thesis results. The k loop accumulates into a single register, so its
+ * floating-point additions form a dependency chain.
+ *///
 // Created by themi on 12/2/2026. .
 //
 

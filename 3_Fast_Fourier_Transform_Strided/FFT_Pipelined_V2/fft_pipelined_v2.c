@@ -1,6 +1,18 @@
-//
-// Created by themi on 5/8/2026.
-//
+/*
+* FFT (strided, radix-2, 1,024 points): pipelined stage.
+ *
+ * Transformations (§ = section in de Fine Licht et al., TPDS 2021):
+ *   §2.6  Loop flattening: the inner loop runs over the N/2 butterflies of a
+ *         stage instead of all N indices, and the pair (even, odd) follows from
+ *         i through affine expressions. No iteration is wasted and the two
+ *         loops are flattened into one pipeline.
+ *   §4.1  Memory access extraction: each input is read once into a register
+ *         and each output is written once.
+ *   DEPENDENCE false: the butterflies of a stage touch disjoint pairs, so the
+ *         dependency the tool assumes on the in-place arrays is false.
+ *
+ * II: 16 (baseline) -> 2, now limited by the ports of the real/img memories.
+ */
 
 #include "fft_pipelined_v2.h"
 
@@ -11,24 +23,24 @@ void fft(double real[FFT_SIZE], double img[FFT_SIZE],
 
         int span = FFT_SIZE >> (log + 1);
 
+        /* §2.6 One iteration per butterfly */
         inner: for (int i = 0; i < FFT_SIZE / 2; i++) {
             #pragma HLS PIPELINE II=1
             #pragma HLS DEPENDENCE variable=real inter false
             #pragma HLS DEPENDENCE variable=img  inter false
 
-            /* Recover butterfly pair ------------------------------------ */
+            /* Butterfly pair from i: group = i / span, jj = i % span */
             int group = i >> (LOG2_SIZE - 1 - log);
             int jj    = i &  (span - 1);
             int even  = (group << 1) * span + jj;
             int odd   = even + span;
 
-            /* Read both inputs once into registers ---------------------- */
+            /* §4.1 Read once */
             double re = real[even];
             double ro = real[odd];
             double ie = img[even];
             double io = img[odd];
 
-            /* Butterfly (register arithmetic, no extra BRAM access) ----- */
             double re_new = re + ro;
             double ro_new = re - ro;
             double ie_new = ie + io;
@@ -44,7 +56,7 @@ void fft(double real[FFT_SIZE], double img[FFT_SIZE],
                 ro_new    = tr;
             }
 
-            /* Write results once ---------------------------------------- */
+            /* §4.1 Write once */
             real[even] = re_new;
             real[odd]  = ro_new;
             img[even]  = ie_new;

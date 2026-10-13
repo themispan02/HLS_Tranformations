@@ -1,53 +1,30 @@
-//
-// Created by themi on 10/4/2026.
-//
-
 /*
- * Implementation based on:
- * A. Danalis, G. Marin, C. McCurdy, J. S. Meredith, P. C. Roth, K. Spafford,
- * V. Tipparaju, and J. S. Vetter.
- * The scalable heterogeneous computing (shoc) benchmark suite.
- * In Proceedings of the 3rd Workshop on General-Purpose Computation on
- * Graphics Processing Units, 2010.
+ * Molecular dynamics (k-nearest neighbours): pipelined stage.
  *
- * Optimizations applied (de Fine Licht et al., IEEE TPDS 2021):
+ * Transformations (§ = section in de Fine Licht et al., TPDS 2021):
+ *   §2.1.2 Tiled accumulation: TILE_SIZE partial sums per force component.
+ *          Consecutive neighbours add into different slots, so the latency of
+ *          the floating-point adder no longer sets the II.
+ *   §2.6   Loop flattening: loop_i and loop_j are flattened by the tool into a
+ *          single pipeline of 4,096 iterations.
+ *   §4.1   Memory access extraction: the position of atom i is read once per
+ *          atom, outside the neighbour loop.
  *
- *   §2.1.2 Tiled Accumulation   — The force accumulators fx, fy, fz
- *          Interleaving           suffer a loop-carried dependency with
- *                                 distance 1 in the flattened loop:
- *                                 each iteration reads the value written
- *                                 by the immediately preceding neighbor
- *                                 computation for the same atom, and the
- *                                 FP-add latency is L_fadd ≈ 4 cycles,
- *                                 forcing II = 4.
- *                                 Fix: TILE_SIZE partial accumulators
- *                                 per dimension. Slot t = j % TILE_SIZE
- *                                 is touched every TILE_SIZE iterations,
- *                                 making the dependency distance TILE_SIZE
- *                                 ≥ L_fadd and allowing II = 1.
+ * II: 9 (baseline) -> 1. The cycle count is still higher than the baseline
+ * (4,167 vs 2,419), because the tool had already unrolled the baseline's inner
+ * loop on its own. The systolic stage recovers the difference.
  *
- *   §2.6  Loop Flattening /    — loop_i (256) and loop_j (16) are
- *         Coalescing             collapsed into a single 4096-iteration
- *                                pipeline, removing 255 redundant
- *                                fill/drain phases (each ~depth cycles).
- *
- *   §4.1  Memory Access        — position_x/y/z[i] are extracted into
- *         Extraction             scalar registers i_x/y/z at j==0 so
- *                                they are read from the BRAM once per
- *                                atom instead of once per neighbor.
- *
- * TILE_SIZE = 8:
- *   • 8 ≥ L_fadd (double) = 4 cycles        → dependency satisfied
- *   • 8 divides maxNeighbors = 16 exactly   → two updates per slot per atom
- *   • 8 × 3 arrays × 8 bytes = 192 bytes of register state
+ * Compared with the flattened variant in ../MD_Pipelined (TILE_SIZE 8, reset
+ * and reduction folded into one loop), this version has the same II and
+ * throughput (4,167 vs 4,176 cycles) but needs less hardware: 151 vs 178 DSP,
+ * 14,725 vs 23,001 FF and 16,775 vs 23,680 LUT. That is why it is the
+ * pipelining stage in the results. The processing elements of MD_Systolic
+ * still use the flattened variant.
  */
 
 #include "md_pipelined.h"
 
-/* TILE_SIZE: number of partial accumulators per dimension.
- * Constraint: TILE_SIZE >= L_fadd (double) = 4 cycles.
- * Chosen as 4 — the minimum that satisfies the constraint and divides
- * maxNeighbors = 16 evenly (each slot receives exactly 4 updates per atom). */
+/* At least the latency of the double adder, and a divisor of maxNeighbors */
 #define TILE_SIZE 4
 
 void md_kernel(TYPE force_x[nAtoms],
@@ -58,6 +35,7 @@ void md_kernel(TYPE force_x[nAtoms],
                TYPE position_z[nAtoms],
                int32_t NL[nAtoms * maxNeighbors])
 {
+    /* §2.1.2 Partial sums, one register per slot */
     TYPE fx_part[TILE_SIZE];
     TYPE fy_part[TILE_SIZE];
     TYPE fz_part[TILE_SIZE];
@@ -69,6 +47,7 @@ void md_kernel(TYPE force_x[nAtoms],
 
     loop_i: for (int32_t i = 0; i < nAtoms; i++) {
 
+        /* §4.1 Read once per atom */
         i_x = position_x[i];
         i_y = position_y[i];
         i_z = position_z[i];
@@ -82,16 +61,14 @@ void md_kernel(TYPE force_x[nAtoms],
 
         loop_j: for (int32_t j = 0; j < maxNeighbors; j++) {
             #pragma HLS PIPELINE II=1
-            /* The tool auto-flattens loop_i and loop_j (triggered by the
-             * UNROLL on loop_init), creating a WAW conflict at the atom
-             * boundary between the init write and the accumulation write.
-             * Both writes target fx_part at distance=1, but the init
-             * always unconditionally resets to 0, so the conflict is safe.
-             * DEPENDENCE inter false overrides the conservative II=2. */
+            /* After flattening, the reset of fx_part at an atom boundary looks
+             * like a conflict with the last update of the previous atom. The
+             * reset always overwrites, so the dependency is false (else II 2). */
             #pragma HLS DEPENDENCE variable=fx_part inter false
             #pragma HLS DEPENDENCE variable=fy_part inter false
             #pragma HLS DEPENDENCE variable=fz_part inter false
 
+            /* §2.1.2 Neighbour j adds into slot j % TILE_SIZE */
             int32_t t    = j % TILE_SIZE;
             int32_t jidx = NL[i * maxNeighbors + j];
 
@@ -113,6 +90,7 @@ void md_kernel(TYPE force_x[nAtoms],
             fz_part[t] += delz * force;
         }
 
+        /* §2.1.2 Reduce the partial sums once per atom */
         TYPE fx = (TYPE)0.0;
         TYPE fy = (TYPE)0.0;
         TYPE fz = (TYPE)0.0;

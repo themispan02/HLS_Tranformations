@@ -1,41 +1,23 @@
-//
-// Created by themi on 2/4/2026.
-//
+/*
+* AES-256 ECB: vectorized stage.
+ *
+ * Builds on the pipelined stage (§2.7 inlining, §2.4 loop fusion, §2.3 S-box
+ * in LUTRAM) and adds (§ = section in de Fine Licht et al., TPDS 2021):
+ *   §3.1  Horizontal unrolling: the byte loops of every round step are fully
+ *         unrolled, so all 16 bytes of the state are processed together. The
+ *         state is partitioned into registers to give each byte its own port.
+ *   §4.1  Memory access extraction: the key is copied into register arrays
+ *         before the round loop.
+ *
+ * Two variants, selected in the "ON OR OFF" block of aes256_encrypt_ecb:
+ *   S-box in LUTRAM (partition commented out):  II 12, 227 cycles
+ *   S-box in registers (partition active):      II 1,  33 cycles
+ */
 
 #include "aes_vectorized.h"
 
-/*=============================================================================
- * aes_vectorized.c
- *
- * AES-256 ECB — VECTORIZED Single-Block Implementation
- *
- * Βασίζεται στο PIPELINED (aes_pipelined.c) και προσθέτει:
- *
- *   §3.1  Horizontal Unrolling  — #pragma HLS UNROLL στα byte-level loops.
- *         (Vectorization)         Επεξεργασία όλων των 16 bytes ταυτόχρονα
- *                                 αντί σειριακά. Απαιτεί array partition για
- *                                 παράλληλη πρόσβαση στη μνήμη.
- *
- *   §4.1  Memory Access         — Local register copies των key/enckey/deckey
- *         Extraction              πριν τον κύριο βρόχο. Αποφεύγει επαναλαμβ-
- *                                 ανόμενες BRAM προσβάσεις μέσα στο pipeline.
- *                                 (Αντιστοιχεί στο Listing 9 του paper)
- *
- * Διαφορά από Pipelined:
- *   Pipelined:   16 bytes σειριακά, ένα ανά cycle (II=1 per byte)
- *   Vectorized:  16 bytes παράλληλα, όλα μαζί σε 1 cycle (throughput ×16)
- *
- * Τι ΔΕΝ αλλάζει από Pipelined:
- *   §2.7 Inlining, §2.3 LUTRAM, §2.4 Fusion, §2.6 Flattening — παραμένουν.
- *=============================================================================*/
-
 #define F(x)   (((x)<<1) ^ ((((x)>>7) & 1) * 0x1b))
 
-/* -----------------------------------------------------------------------
- * §2.3 Random Access Buffering: RAM_2P_LUTRAM (κληρονομείται από Pipelined)
- * §3.1: static → ο HLS βλέπει τον πλήρη πίνακα και μπορεί να τον
- *        partition-αρει αν χρειαστεί σε μεταγενέστερο στάδιο.
- * ----------------------------------------------------------------------- */
 static const uint8_t sbox[256] = {
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5,
     0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
@@ -73,80 +55,51 @@ static const uint8_t sbox[256] = {
 
 #define rj_sbox(x) sbox[(x)]
 
-/* §2.7 Inlining (κληρονομείται) */
 static uint8_t rj_xtime(uint8_t x)
 {
-#pragma HLS INLINE
+    #pragma HLS INLINE
     return (x & 0x80) ? ((x << 1) ^ 0x1b) : (x << 1);
 }
 
-/* -----------------------------------------------------------------------
- * §3.1 Horizontal Unrolling — aes_subBytes
- *
- * Pipelined:  while(i--) → 16 iterations σειριακά, 1 sbox lookup/cycle
- * Vectorized: UNROLL complete → 16 lookups παράλληλα, 1 cycle total
- *
- * Απαιτεί:
- *   1. Loop από 0→16 (όχι while(i--)) για static bounds → UNROLL
- *   2. buf: ARRAY_PARTITION complete → 16 ξεχωριστοί registers
- *   3. sbox: RAM_2P_LUTRAM (§2.3) → αρκετά ports για παράλληλα lookups
- *      (ή complete partition αν χρειαστεί σε Systolic)
- *
- * Κώδικα αλλαγή: while(i--) → for(i=0;i<16;i++) για να επιτρέψει UNROLL.
- * Ο HLS δεν μπορεί να κάνει UNROLL σε while με φθίνουσα μεταβλητή.
- * ----------------------------------------------------------------------- */
+/* §3.1 The loops below are rewritten with fixed bounds (for instead of while(i--))
+ * so that they can be fully unrolled */
 static void aes_subBytes(uint8_t *buf)
 {
-#pragma HLS INLINE
+    #pragma HLS INLINE
     uint8_t i;
     sub: for (i = 0; i < 16; i++)
     {
-#pragma HLS UNROLL
+        #pragma HLS UNROLL
         buf[i] = rj_sbox(buf[i]);
     }
 }
 
-/* -----------------------------------------------------------------------
- * §3.1 Horizontal Unrolling — aes_addRoundKey
- *
- * 16 XOR operations παράλληλα αντί σειριακά.
- * Κώδικα αλλαγή: while(i--) → for(i=0;i<16;i++) για UNROLL.
- * ----------------------------------------------------------------------- */
 static void aes_addRoundKey(uint8_t *buf, uint8_t *key)
 {
-#pragma HLS INLINE
+    #pragma HLS INLINE
     uint8_t i;
     addkey: for (i = 0; i < 16; i++)
     {
-#pragma HLS UNROLL
+        #pragma HLS UNROLL
         buf[i] ^= key[i];
     }
 }
 
-/* -----------------------------------------------------------------------
- * §3.1 Horizontal Unrolling — aes_addRoundKey_cpy
- *
- * Unroll του copy+XOR loop.
- * ----------------------------------------------------------------------- */
 static void aes_addRoundKey_cpy(uint8_t *buf, uint8_t *key, uint8_t *cpk)
 {
-#pragma HLS INLINE
+    #pragma HLS INLINE
     uint8_t i;
     cpkey: for (i = 0; i < 16; i++)
     {
-#pragma HLS UNROLL
+        #pragma HLS UNROLL
         buf[i] ^= (cpk[i] = key[i]);
         cpk[16+i] = key[16+i];
     }
 }
 
-/* -----------------------------------------------------------------------
- * §2.7 Inlining (κληρονομείται) — aes_shiftRows
- * Παραμένει ίδιο: ήδη combinational, χωρίς loop.
- * ----------------------------------------------------------------------- */
 static void aes_shiftRows(uint8_t *buf)
 {
-#pragma HLS INLINE
+    #pragma HLS INLINE
     uint8_t i, j;
     i = buf[1];  buf[1]  = buf[5];  buf[5]  = buf[9];  buf[9]  = buf[13]; buf[13] = i;
     i = buf[10]; buf[10] = buf[2];  buf[2]  = i;
@@ -154,21 +107,15 @@ static void aes_shiftRows(uint8_t *buf)
     j = buf[14]; buf[14] = buf[6];  buf[6]  = j;
 }
 
-/* -----------------------------------------------------------------------
- * §3.1 Horizontal Unrolling — aes_mixColumns
- *
- * 4 columns παράλληλα αντί σειριακά.
- * Κώδικα αλλαγή: loop με i+=4 → for(col=0;col<4;col++) για UNROLL.
- * Κάθε column = 4 bytes → 16 bytes total σε 1 cycle.
- * ----------------------------------------------------------------------- */
+/* §3.1 Column loop with a unit stride, unrolled: four columns at once */
 static void aes_mixColumns(uint8_t *buf)
 {
-#pragma HLS INLINE
+    #pragma HLS INLINE
     uint8_t col;
     uint8_t a, b, c, d, e;
     mix: for (col = 0; col < 4; col++)
     {
-#pragma HLS UNROLL
+        #pragma HLS UNROLL
         a = buf[col*4];   b = buf[col*4+1];
         c = buf[col*4+2]; d = buf[col*4+3];
         e = a ^ b ^ c ^ d;
@@ -179,15 +126,9 @@ static void aes_mixColumns(uint8_t *buf)
     }
 }
 
-/* -----------------------------------------------------------------------
- * §3.1 Horizontal Unrolling — aes_expandEncKey
- *
- * Unroll των exp1 (3 iter) και exp2 (3 iter).
- * Μικρά loops → UNROLL → fully combinational key expansion.
- * ----------------------------------------------------------------------- */
 static void aes_expandEncKey(uint8_t *k, uint8_t *rc)
 {
-#pragma HLS INLINE
+    #pragma HLS INLINE
     uint8_t i;
     k[0] ^= rj_sbox(k[29]) ^ (*rc);
     k[1] ^= rj_sbox(k[30]);
@@ -196,7 +137,7 @@ static void aes_expandEncKey(uint8_t *k, uint8_t *rc)
     *rc = F(*rc);
     exp1: for (i = 4; i < 16; i += 4)
     {
-#pragma HLS UNROLL
+        #pragma HLS UNROLL
         k[i] ^= k[i-4]; k[i+1] ^= k[i-3]; k[i+2] ^= k[i-2]; k[i+3] ^= k[i-1];
     }
     k[16] ^= rj_sbox(k[12]);
@@ -205,67 +146,43 @@ static void aes_expandEncKey(uint8_t *k, uint8_t *rc)
     k[19] ^= rj_sbox(k[15]);
     exp2: for (i = 20; i < 32; i += 4)
     {
-#pragma HLS UNROLL
+        #pragma HLS UNROLL
         k[i] ^= k[i-4]; k[i+1] ^= k[i-3]; k[i+2] ^= k[i-2]; k[i+3] ^= k[i-1];
     }
 }
 
-/* -----------------------------------------------------------------------
- * aes256_encrypt_ecb — TOP-LEVEL, single block (ίδια signature)
- *
- * Νέα pragmas vs Pipelined:
- *
- * §3.1 ARRAY_PARTITION complete — buf, local_key, local_enckey:
- *   Χωρίς partition: 1 BRAM port → μόνο 1 στοιχείο/cycle ακόμα και με UNROLL
- *   Με complete partition: κάθε byte = ξεχωριστός register → N παράλληλες
- *   προσβάσεις/cycle. Αναγκαίο συνοδευτικό του UNROLL (Listing 10 paper).
- *
- * §4.1 Memory Access Extraction — local_key[32], local_enckey[16]:
- *   Αντί να διαβάζει ctx->key/enckey από BRAM κάθε φορά μέσα στον ecb3,
- *   εξάγει τις τιμές σε local arrays (registers) πριν τον βρόχο.
- *   → Μηδενική BRAM contention κατά τη διάρκεια του pipeline.
- *   → Αντιστοιχεί στο Listing 9 του paper: "extract reads before pipeline".
- * ----------------------------------------------------------------------- */
 void aes256_encrypt_ecb(aes256_context *ctx, uint8_t k[32], uint8_t buf[16])
 {
-/* §2.3: sbox → LUTRAM (κληρονομείται από Pipelined) */
-#pragma HLS RESOURCE variable=sbox core=RAM_2P_LUTRAM
+    #pragma HLS RESOURCE variable=sbox core=RAM_2P_LUTRAM
 
-/*************************** ON OR OFF *************************************/
-/* §3.1: sbox → complete partition 256 ξεχωριστοί registers */
-#pragma HLS ARRAY_PARTITION variable=sbox complete
-/***************************************************************************/
+    /*************************** ON OR OFF *************************************/
+    /* Active: S-box in 256 registers, all lookups of a round in parallel (II 1).
+    * Commented out: S-box stays in dual-port LUTRAM (II 12). */
+    #pragma HLS ARRAY_PARTITION variable=sbox complete
+    /***************************************************************************/
 
-/* §3.1: buf → complete partition → 16 ξεχωριστοί registers
- * Χωρίς αυτό: UNROLL στα sub/mix/addkey loops δεν έχει αποτέλεσμα
- * γιατί ο HLS δεν μπορεί να παράγει παράλληλες BRAM προσβάσεις. */
-#pragma HLS ARRAY_PARTITION variable=buf complete
+    /* §3.1 One register per state byte, so the unrolled loops can access all 16 */
+    #pragma HLS ARRAY_PARTITION variable=buf complete
 
-/* §4.1: Local copies για key material → registers αντί BRAM.
- * Τα ctx->key, ctx->enckey, ctx->deckey είναι BRAM (pointer args).
- * Με local arrays + complete partition: zero-latency access στο pipeline. */
+    /* §4.1 Key copied into register arrays */
     uint8_t local_key[32];
     uint8_t local_enckey[16];
-#pragma HLS ARRAY_PARTITION variable=local_key complete
-#pragma HLS ARRAY_PARTITION variable=local_enckey complete
+    #pragma HLS ARRAY_PARTITION variable=local_key complete
+    #pragma HLS ARRAY_PARTITION variable=local_enckey complete
 
     uint8_t rcon = 1;
     uint8_t i;
 
-    /* §4.1 Memory Access Extraction:
-     * Εξαγωγή k[] σε local register πριν τον βρόχο.
-     * Μέσα στον ecb3, χρησιμοποιείται local_key (register) όχι k (BRAM). */
     ecb1: for (i = 0; i < 32; i++)
     {
-#pragma HLS UNROLL
+        #pragma HLS UNROLL
         ctx->enckey[i] = ctx->deckey[i] = k[i];
         local_key[i] = k[i];
     }
 
-    /* §4.1: local_enckey = πρώτα 16 bytes του enckey για addRoundKey_cpy */
     init_enc: for (i = 0; i < 16; i++)
     {
-#pragma HLS UNROLL
+        #pragma HLS UNROLL
         local_enckey[i] = ctx->enckey[i];
     }
 
@@ -274,16 +191,11 @@ void aes256_encrypt_ecb(aes256_context *ctx, uint8_t k[32], uint8_t buf[16])
 
     aes_addRoundKey_cpy(buf, ctx->enckey, ctx->key);
 
-    /* §2.6 + §2.4 + §3.1:
-     * PIPELINE στον ecb3 (κληρονομείται από Pipelined) +
-     * UNROLL στα inner loops (νέο στο Vectorized) =
-     * κάθε round iteration επεξεργάζεται 16 bytes σε 1 cycle
-     * αντί 16 cycles (×16 speedup per round). */
     ecb3: for (i = 1, rcon = 1; i < 14; ++i)
     {
-#pragma HLS PIPELINE
+        #pragma HLS PIPELINE
         aes_subBytes(buf);      /* UNROLL ×16 → 16 sbox lookups parallel  */
-        aes_shiftRows(buf);     /* combinational, ήδη parallel             */
+        aes_shiftRows(buf);     /* combinational, already parallel             */
         aes_mixColumns(buf);    /* UNROLL ×4  → 4 columns parallel         */
         if (i & 1) aes_addRoundKey(buf, &ctx->key[16]);  /* UNROLL ×16    */
         else       aes_expandEncKey(ctx->key, &rcon),    /* UNROLL ×3+3   */

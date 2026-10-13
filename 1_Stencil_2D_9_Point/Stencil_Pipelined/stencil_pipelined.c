@@ -1,68 +1,31 @@
-//
-// Created by themi on 5/20/2026.
-//
+/*
+ * Stencil 2D, 9-point: pipelined stage.
+ *
+ * Transformations (§ = section in de Fine Licht et al., TPDS 2021):
+ *   §2.2  Delay buffering: two line buffers and a 3x3 window, so each cycle
+ *         reads one new pixel instead of nine.
+ *   §2.3  Random access buffering: the filter is copied into registers.
+ *   §2.6  Pipelined loop flattening: the row and column loops become a single
+ *         loop, so the pipeline does not drain at the end of every row.
+ *
+ * II: 5 (baseline) -> 1.
+ */
 
 #include "stencil_pipelined.h"
-/*=============================================================================
- * stencil.c  —  PIPELINED 9-Point Stencil (MachSuite stencil2d)
- *
- * Μετασχηματισμοί από de Fine Licht et al. §2 (Pipeline-Enabling):
- *
- *   §2.2  Delay Buffers
- *         Αντί για 9 reads/cycle από το orig[], κρατάμε 2 line buffers
- *         (delays 1 και 2 rows) + 3×3 sliding window register. Σε κάθε
- *         iteration διαβάζεται ΕΝΑ νέο pixel από το external memory, και
- *         8 από τα 9 στοιχεία του window επαναχρησιμοποιούνται από
- *         προηγούμενες iterations (6 από horizontal shift, 2 από line
- *         buffers). Reduction memory bandwidth: 9×.
- *
- *   §2.6  Pipelined Loop Flattening
- *         Οι δύο εμφωλευμένοι βρόχοι (r, c) μετατρέπονται σε ΕΝΑ flat
- *         loop πάνω από το idx ∈ [0, row_size·col_size). Εξαλείφει το
- *         drain overhead μεταξύ διαδοχικών rows (≈ pipeline_depth ×
- *         row_size wasted cycles στο naive nested approach).
- *
- *   §2.3  Random Access Buffering
- *         Ο filter[9] είναι function argument που κανονικά πάει σε BRAM
- *         με 2 ports. Όταν unrollαρουμε τους k1/k2 βρόχους (trip count 3)
- *         χρειαζόμαστε 9 ταυτόχρονα reads → port contention. Λύση:
- *         αντιγραφή σε local_filter[] με ARRAY_PARTITION complete →
- *         όλα τα στοιχεία σε registers, 9 parallel reads χωρίς conflict.
- *
- * Extras (όχι §2, υποστηρικτικά):
- *   - ARRAY_PARTITION complete στο window/local_filter: απαραίτητο
- *     pragma για να υλοποιηθούν τα παραπάνω σε hardware.
- *   - Tree reduction: αυτόματη από τον HLS αφού οι k1/k2 loops είναι
- *     fully unrolled και TYPE=int32_t (integer add latency = 1).
- *============================================================================*/
 
 void stencil (TYPE orig[row_size * col_size],
               TYPE sol[row_size * col_size],
               TYPE filter[f_size])
 {
-    /*------------------------------------------------------------------------*
-     * §2.2  Delay Buffers — 2 line buffers (BRAM, dual-port)
-     *
-     * line_buf_0 → πίξελ από row (r-2)  ("top"    γραμμή του window)
-     * line_buf_1 → πίξελ από row (r-1)  ("middle" γραμμή του window)
-     * Η τρέχουσα γραμμή (r) έρχεται κατευθείαν από το orig[idx].
-     *------------------------------------------------------------------------*/
+    /* §2.2 Line buffers: line_buf_0 holds row r-2, line_buf_1 holds row r-1 */
     TYPE line_buf_0[col_size];
     TYPE line_buf_1[col_size];
 
-    /*------------------------------------------------------------------------*
-     * §2.2  Delay Buffers — 3×3 sliding window (registers)
-     *
-     * Σε κάθε iteration κάνουμε horizontal shift: window[*][0] ← window[*][1],
-     * window[*][1] ← window[*][2], και το window[*][2] παίρνει τη νέα στήλη
-     * (top, mid, bot) από τα line buffers + το new pixel.
-     *------------------------------------------------------------------------*/
+    /* §2.2 3x3 sliding window, fully partitioned into registers */
     TYPE window[3][3];
     #pragma HLS ARRAY_PARTITION variable=window complete dim=0
 
-    /*------------------------------------------------------------------------*
-     * §2.3  Random Access Buffering — filter coefficients σε registers
-     *------------------------------------------------------------------------*/
+    /* §2.3 Filter coefficients in registers, so all nine can be read in one cycle */
     TYPE local_filter[f_size];
     #pragma HLS ARRAY_PARTITION variable=local_filter complete dim=1
 
@@ -71,13 +34,7 @@ void stencil (TYPE orig[row_size * col_size],
         local_filter[i] = filter[i];
     }
 
-    /*------------------------------------------------------------------------*
-     * §2.6  Pipelined Loop Flattening — single pipelined raster-scan loop
-     *
-     * Αντί για nested  for(r)  for(c)  ... έχουμε ένα flat loop με μήκος
-     * row_size × col_size = 8192 iterations. Counters r, c ενημερώνονται
-     * manually στο τέλος κάθε iteration.
-     *------------------------------------------------------------------------*/
+    /* §2.6 One flat loop over the whole grid; r and c are advanced by hand */
     int r = 0, c = 0;
 
     main_loop: for (int idx = 0; idx < row_size * col_size; idx++) {
@@ -91,7 +48,7 @@ void stencil (TYPE orig[row_size * col_size],
         /*--- ONE read from external memory per cycle (vs 9 στο naive) ---*/
         TYPE new_pixel = orig[idx];
 
-        /*--- Νέα δεξιά στήλη του window από τα line buffers ---*/
+        /* New right column: rows r-2 and r-1 from the line buffers, row r from the input */
         TYPE top = line_buf_0[c];      /* πίξελ στο (r-2, c) */
         TYPE mid = line_buf_1[c];      /* πίξελ στο (r-1, c) */
         TYPE bot = new_pixel;          /* πίξελ στο (r,   c) */
@@ -100,11 +57,11 @@ void stencil (TYPE orig[row_size * col_size],
         window[1][2] = mid;
         window[2][2] = bot;
 
-        /*--- Shift line buffers vertically (top ← mid ← bot) ---*/
+        /* Move the column one row down in the line buffers (top ← mid ← bot) ---*/
         line_buf_0[c] = mid;
         line_buf_1[c] = bot;
 
-        /*--- Emit output όταν το window έχει γεμίσει πλήρως ---*/
+        /* Produce an output once the window holds a full 3x3 neighbourhood */
         if (r >= 2 && c >= 2) {
             TYPE temp = 0;
             stencil_label3: for (int k1 = 0; k1 < 3; k1++) {
@@ -117,7 +74,6 @@ void stencil (TYPE orig[row_size * col_size],
             sol[(r - 2) * col_size + (c - 2)] = temp;
         }
 
-        /*--- Advance flat counters ---*/
         if (c == col_size - 1) { c = 0; r++; }
         else                   { c++;       }
     }

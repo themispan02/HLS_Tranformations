@@ -1,48 +1,21 @@
-//
-// Created by Themis on 29/9/2025.
-//
+/*
+ * 5-point Jacobi stencil on a 12x12 float grid, plain C with a main().
+ * Exploration, not used in the thesis results. Borders reuse the centre value.
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
 
-#define N 12  // Διάσταση πίνακα (NxN)
-#define ITERATIONS 10  // Αριθμός επαναλήψεων Jacobi
+#define N 12
+#define ITERATIONS 10
 
-// Τύπος δεδομένων για τους πίνακες
 typedef float data_t;
 
-// 5-point Jacobi Stencil Kernel
 void jacobi_kernel(data_t A[N][N], data_t B[N][N]) {
     int i, j;
 
-    // Εφαρμογή του 5-point stencil
-    // Για κάθε εσωτερικό σημείο (i, j), υπολογίζουμε τον μέσο όρο
-    // των 4 γειτονικών σημείων (πάνω, κάτω, αριστερά, δεξιά)
-
-        // Για Fixed Boundaries
-        /*for (i = 1; i < N-1; i++) {
-            for (j = 1; j < N-1; j++) {
-                B[i][j] = (A[i-1][j] + A[i+1][j] + A[i][j-1] + A[i][j+1]) * 0.25f;
-            }
-        }
-
-        // Αντιγραφή των συνοριακών σημείων (boundary conditions)
-        // Πάνω και κάτω σειρές
-        for (j = 0; j < N; j++) {
-            B[0][j] = A[0][j];
-            B[N-1][j] = A[N-1][j];
-        }
-
-        // Αριστερή και δεξιά στήλες
-        for (i = 0; i < N; i++) {
-            B[i][0] = A[i][0];
-            B[i][N-1] = A[i][N-1];
-        }*/
-
-    // Για Neumann Boundaries
     for (i = 0; i < N; i++) {
         for (j = 0; j < N; j++) {
-            // Υπολογισμός γειτόνων με boundary conditions
             const data_t west =
                 (j == 0) ? A[i][j] : A[i][j-1];
 
@@ -55,37 +28,31 @@ void jacobi_kernel(data_t A[N][N], data_t B[N][N]) {
             const data_t south =
                 (i == N-1) ? A[i][j] : A[i+1][j];
 
-            // Υπολογισμός νέας τιμής (μέσος όρος 4 γειτόνων)
             B[i][j] = (data_t)0.25 * (north + west + east + south);
         }
     }
 }
 
-// Top-level function για Vitis HLS
 void jacobi_stencil(data_t input[N][N], data_t output[N][N], int num_iterations) {
     data_t temp_A[N][N];
     data_t temp_B[N][N];
     int i, j;
 
-    // Αρχικοποίηση του temp_A με τα input δεδομένα
     for (i = 0; i < N; i++) {
         for (j = 0; j < N; j++) {
             temp_A[i][j] = input[i][j];
         }
     }
 
-    // Εκτέλεση επαναλήψεων Jacobi
+    /* Alternate between the two buffers on every iteration */
     for (int iter = 0; iter < num_iterations; iter++) {
         if (iter % 2 == 0) {
-            // Ζυγή επανάληψη: A -> B
             jacobi_kernel(temp_A, temp_B);
         } else {
-            // Μονή επανάληψη: B -> A
             jacobi_kernel(temp_B, temp_A);
         }
     }
 
-    // Αντιγραφή του τελικού αποτελέσματος στο output
     data_t *final = (num_iterations % 2 == 0) ? &temp_A[0][0] : &temp_B[0][0];
     for (i = 0; i < N; i++) {
         for (j = 0; j < N; j++) {
@@ -94,7 +61,6 @@ void jacobi_stencil(data_t input[N][N], data_t output[N][N], int num_iterations)
     }
 }
 
-// Βοηθητική συνάρτηση για εμφάνιση πίνακα
 void print_array(data_t arr[N][N], const char* title) {
     int i, j;
     printf("\n%s:\n", title);
@@ -108,21 +74,18 @@ void print_array(data_t arr[N][N], const char* title) {
     printf("======================================\n\n");
 }
 
-// Testbench για επαλήθευση
+/* Testbench */
 int main() {
     data_t input[N][N];
     data_t output[N][N];
 
     printf("Αρχικοποίηση πίνακα %dx%d...\n", N, N);
 
-    // Αρχικοποίηση με δοκιμαστικά δεδομένα
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {
             if (i == 0 || i == N-1 || j == 0 || j == N-1) {
-                // Συνοριακές τιμές (boundary conditions)
                 input[i][j] = 100.0f;
             } else {
-                // Εσωτερικές τιμές
                 input[i][j] = 0.0f;
             }
         }
@@ -130,15 +93,12 @@ int main() {
     print_array(input, "ΑΡΧΙΚΟΣ ΠΙΝΑΚΑΣ");
     printf("Εκτέλεση %d επαναλήψεων Jacobi stencil...\n", ITERATIONS);
 
-    // Κλήση της top-level function
     jacobi_stencil(input, output, ITERATIONS);
 
     printf("Ολοκλήρωση!\n\n");
 
-    // Εμφάνιση τελικού πίνακα
     print_array(output, "ΤΕΛΙΚΟΣ ΠΙΝΑΚΑΣ");
 
-    // Εμφάνιση ενός δείγματος αποτελεσμάτων (γωνίες και κέντρο)
     printf("Δείγμα αποτελεσμάτων:\n");
     printf("Πάνω αριστερή γωνία: %.2f\n", output[0][0]);
     printf("Κέντρο: %.2f\n", output[N/2][N/2]);

@@ -1,11 +1,10 @@
-//
-// Created by themi on 3/22/2026.
-//
-
 /*
-*   Byte-oriented AES-256 implementation.
-*   All lookup tables replaced with 'on the fly' calculations.
-*/
+ * AES-256 ECB: baseline.
+ * The original MachSuite aes kernel, unmodified and without HLS directives.
+ * Source: https://github.com/breagen/MachSuite (ISC license; Ilya O. Levin,
+ * Hal Finney, Harvard University)
+ */
+
 #include "aes.h"
 
 #define F(x)   (((x)<<1) ^ ((((x)>>7) & 1) * 0x1b))

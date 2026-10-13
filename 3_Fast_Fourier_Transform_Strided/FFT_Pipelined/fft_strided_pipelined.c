@@ -1,6 +1,12 @@
-//
-// Created by themi on 5/8/2026.
-//
+/*
+* FFT: first pipelining attempt. Not used in the results.
+ *
+ * Keeps the loop structure of the baseline and adds a pipelined inner loop,
+ * DEPENDENCE false and cyclic partitioning by 2. It was replaced by
+ * FFT_Pipelined_V2 for two reasons: half of the inner iterations do nothing
+ * (the continue), and the odd output is never written back from r_on/i_on, so
+ * the result does not match the baseline.
+ */
 
 #include "fft_strided_pipelined.h"
 
@@ -26,21 +32,15 @@ void fft(double real[FFT_SIZE], double img[FFT_SIZE],
 
             even = odd ^ span;
 
-            // Local registers — αποφεύγουμε WAR hazard:
-            // το twiddle χρειάζεται την αρχική τιμή του real[odd],
-            // όχι αυτή που μόλις γράψαμε από το butterfly
-            // 1 read έκαστο — αποθηκεύονται σε registers
+            /* Read each input once into a register */
             double r_e = real[even];
             double r_o = real[odd];
             double i_e = img[even];
             double i_o = img[odd];
 
-            // FIX: υπολογισμός butterfly odd result σε register
-            // ΠΡΙ το write — έτσι δεν χρειάζεται επιπλέον read
             double r_on = r_e - r_o;
             double i_on = i_e - i_o;
 
-            // Write even (πάντα χωρίς twiddle)
             real[even] = r_e + r_o;
             img[even]  = i_e + i_o;
 

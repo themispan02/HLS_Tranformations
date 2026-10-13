@@ -1,46 +1,23 @@
-//
-// Created by themi on 3/22/2026.
-//
-
-/*=============================================================================
- * aes_pipelined.c
+/*
+* AES-256 ECB: pipelined stage.
  *
- * AES-256 ECB — PIPELINED Single-Block Implementation
+ * Transformations (§ = section in de Fine Licht et al., TPDS 2021):
+ *   §2.7  Inlining: every helper is inlined, so the round loop has one flat body.
+ *   §2.4  Pipelined loop fusion: once inlined, the byte loops of SubBytes,
+ *         MixColumns and AddRoundKey share the scope of the round loop and are
+ *         scheduled in a single pipeline.
+ *   §2.3  Random access buffering: the S-box, indexed by data, moves from BRAM
+ *         to dual-port LUTRAM.
  *
- * Μετασχηματισμοί από de Fine Licht et al. §2 (Pipeline-Enabling):
- *
- *   §2.7  Inlining            — #pragma HLS INLINE σε όλες τις helpers.
- *                               ΠΡΟΑΠΑΙΤΟΥΜΕΝΟ για §2.4 και §2.6.
- *                               Χωρίς inline ο HLS βλέπει function calls
- *                               ως ξεχωριστά FSM states → αδύνατο pipeline.
- *
- *   §2.3  Random Access       — sbox: RAM_1P_BRAM (naive, 2-cycle latency)
- *         Buffering              → RAM_2P_LUTRAM (1-cycle, 2 ports).
- *                               Index του sbox = buf[i], άγνωστος
- *                               compile-time → classic random access pattern.
- *                               Χωρίς αυτό: II ≥ 2 ακόμα και μετά inlining.
- *
- *   §2.4  Pipelined Loop      — Τα adjacent inline loops του κάθε round
- *         Fusion                (sub/shift/mix/addkey) μετά το §2.7 inlining
- *                               βρίσκονται στον ίδιο scope → ο HLS τα fuses
- *                               σε ένα ενιαίο pipeline (Listing 5 paper).
- *
- *   §2.6  Pipelined Loop      — #pragma HLS PIPELINE στον ecb3 (14 rounds).
- *         Flattening/           Μετά το inlining, ο ecb3 περιέχει inline
- *         Coalescing            bodies → HLS coalesces rounds + bytes σε ένα
- *                               pipeline χωρίς drain cycles (Listing 8 paper).
- *
- *=============================================================================*/
+ * II of the round loop: 16 (baseline) -> 12. What remains is the two ports of
+ * the S-box memory, which the vectorized stage removes.
+ */
 
 #include "aes_pipelined.h"
 
 #define F(x)   (((x)<<1) ^ ((((x)>>7) & 1) * 0x1b))
 
-/* -----------------------------------------------------------------------
- * §2.3 Random Access Buffering:
- * static → scope εντός αρχείου, καλύτερη ορατότητα για τον HLS.
- * #pragma HLS RESOURCE παρακάτω το δεσμεύει σε RAM_2P_LUTRAM.
- * ----------------------------------------------------------------------- */
+/* §2.3 Placed in LUTRAM by the RESOURCE pragma in aes256_encrypt_ecb */
 static const uint8_t sbox[256] = {
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5,
     0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
@@ -78,45 +55,37 @@ static const uint8_t sbox[256] = {
 
 #define rj_sbox(x) sbox[(x)]
 
-/* -----------------------------------------------------------------------
- * §2.7 Inlining: rj_xtime → pure combinational logic μετά inline.
- * ----------------------------------------------------------------------- */
+/* §2.7 All helpers below are inlined into aes256_encrypt_ecb */
 static uint8_t rj_xtime(uint8_t x)
 {
-#pragma HLS INLINE
+    #pragma HLS INLINE
     return (x & 0x80) ? ((x << 1) ^ 0x1b) : (x << 1);
 }
 
-/* -----------------------------------------------------------------------
- * §2.7 Inlining helpers — ΠΡΟΑΠΑΙΤΟΥΜΕΝΟ για §2.4 και §2.6.
- * Χωρίς inline: ξεχωριστά FSM states → drain cycles μεταξύ
- * sub/shift/mix/addkey σε κάθε round.
- * ----------------------------------------------------------------------- */
 static void aes_subBytes(uint8_t *buf)
 {
-#pragma HLS INLINE
+    #pragma HLS INLINE
     uint8_t i = 16;
     sub: while (i--) buf[i] = rj_sbox(buf[i]);
 }
 
 static void aes_addRoundKey(uint8_t *buf, uint8_t *key)
 {
-#pragma HLS INLINE
+    #pragma HLS INLINE
     uint8_t i = 16;
     addkey: while (i--) buf[i] ^= key[i];
 }
 
 static void aes_addRoundKey_cpy(uint8_t *buf, uint8_t *key, uint8_t *cpk)
 {
-#pragma HLS INLINE
+    #pragma HLS INLINE
     uint8_t i = 16;
     cpkey: while (i--) buf[i] ^= (cpk[i] = key[i]), cpk[16+i] = key[16+i];
 }
 
 static void aes_shiftRows(uint8_t *buf)
 {
-#pragma HLS INLINE
-    /* Μετά το inline: απλές αναθέσεις → combinational wires. */
+    #pragma HLS INLINE
     uint8_t i, j;
     i = buf[1];  buf[1]  = buf[5];  buf[5]  = buf[9];  buf[9]  = buf[13]; buf[13] = i;
     i = buf[10]; buf[10] = buf[2];  buf[2]  = i;
@@ -126,9 +95,7 @@ static void aes_shiftRows(uint8_t *buf)
 
 static void aes_mixColumns(uint8_t *buf)
 {
-#pragma HLS INLINE
-    /* §2.4: Μετά το inline, adjacent με sub/addkey στον ίδιο
-     * scope του ecb3 → HLS fuses σε ένα pipeline (Listing 5). */
+    #pragma HLS INLINE
     uint8_t i, a, b, c, d, e;
     mix: for (i = 0; i < 16; i += 4)
     {
@@ -143,7 +110,7 @@ static void aes_mixColumns(uint8_t *buf)
 
 static void aes_expandEncKey(uint8_t *k, uint8_t *rc)
 {
-#pragma HLS INLINE
+    #pragma HLS INLINE
     uint8_t i;
     k[0] ^= rj_sbox(k[29]) ^ (*rc);
     k[1] ^= rj_sbox(k[30]);
@@ -152,7 +119,7 @@ static void aes_expandEncKey(uint8_t *k, uint8_t *rc)
     *rc = F(*rc);
     exp1: for (i = 4; i < 16; i += 4)
     {
-#pragma HLS PIPELINE
+        #pragma HLS PIPELINE
         k[i] ^= k[i-4]; k[i+1] ^= k[i-3]; k[i+2] ^= k[i-2]; k[i+3] ^= k[i-1];
     }
     k[16] ^= rj_sbox(k[12]);
@@ -161,28 +128,15 @@ static void aes_expandEncKey(uint8_t *k, uint8_t *rc)
     k[19] ^= rj_sbox(k[15]);
     exp2: for (i = 20; i < 32; i += 4)
     {
-#pragma HLS PIPELINE
+        #pragma HLS PIPELINE
         k[i] ^= k[i-4]; k[i+1] ^= k[i-3]; k[i+2] ^= k[i-2]; k[i+3] ^= k[i-1];
     }
 }
 
-/* -----------------------------------------------------------------------
- * aes256_encrypt_ecb — TOP-LEVEL, single block (ίδια signature με naive)
- *
- * §2.3: #pragma HLS RESOURCE → sbox σε RAM_2P_LUTRAM.
- *   Αιτία: index = buf[i], random access pattern (§2.3 του paper).
- *   LUTRAM: 1-cycle read latency + 2 ports → II=1 εφικτό.
- *   BRAM:   2-cycle read latency + 1 port  → II ≥ 2 αναπόφευκτο.
- *
- * §2.6 + §2.4: #pragma HLS PIPELINE στον ecb3.
- *   Μετά το §2.7 inlining, ο ecb3 (14 iter) περιέχει inline bodies
- *   των sub/shift/mix/addkey. Pipeline pragma → HLS coalesces όλα σε
- *   ένα ενιαίο pipeline χωρίς drain cycles μεταξύ rounds.
- *   (Listing 8 paper: before/after coalescing)
- * ----------------------------------------------------------------------- */
 void aes256_encrypt_ecb(aes256_context *ctx, uint8_t k[32], uint8_t buf[16])
 {
-#pragma HLS RESOURCE variable=sbox core=RAM_2P_LUTRAM
+    /* §2.3 S-box in LUTRAM: one-cycle reads on two ports instead of BRAM */
+    #pragma HLS RESOURCE variable=sbox core=RAM_2P_LUTRAM
 
     uint8_t rcon = 1;
     uint8_t i;
@@ -195,12 +149,10 @@ void aes256_encrypt_ecb(aes256_context *ctx, uint8_t k[32], uint8_t buf[16])
 
     aes_addRoundKey_cpy(buf, ctx->enckey, ctx->key);
 
-    /* §2.6 Flattening + §2.4 Fusion:
-     * PIPELINE + inlined helpers = ένα ενιαίο pipeline για 14 rounds.
-     * Κάθε νέο round ξεκινά χωρίς να περιμένει drain του προηγούμενου. */
+    /* §2.4 Round loop pipelined; the inlined byte loops are scheduled inside it */
     ecb3: for (i = 1, rcon = 1; i < 14; ++i)
     {
-#pragma HLS PIPELINE
+        #pragma HLS PIPELINE
         aes_subBytes(buf);
         aes_shiftRows(buf);
         aes_mixColumns(buf);
